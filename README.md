@@ -1,4 +1,4 @@
-# copy files recursively under subdirectories of the current path, in Windows and linux
+# copy files recursively under subdirectories, in Windows and linux
 
 **Copy** to current path files searched with Perl regular 
 expressions (regex) **recursively** under subdirectories, 
