@@ -10,7 +10,7 @@ middle and erasing chars to just 17 chars per directory.
 
 ## Use:
 
-	cpr [-#hrnNyY] ['/FILTER_REGEX/' [PATH]]
+	cpr [-#hnNyY] [ '/FILTER_REGEX/' [PATH] ]
 
 where '/FILTER_REGEX/' is a regular expression match pattern.
 If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
@@ -19,7 +19,7 @@ If PATH is not indicated, '.' is used (current path).
 Please note that in linux simple quotation marks are preferred: ''
 whilst in Windows double quotation marks are needed: ""
 
-**-#**: a number indicating how much files at most will be copied 
+**-#**: a number indicating how many files at most will be copied
       from each subdirectory. For example: `-21`
 
 **-h**: show full help with examples.
@@ -53,9 +53,10 @@ As you can see, the command shows a list of actions to execute, and requires pre
 	        search pattern:         /LOG$/
 
 	.\subdir\file.20180702004423.LOG       ->      subdir_file.20180702004423.LOG
+	.\subdir3\subdir3.4\file.LOG       ->      subdir3_subdir3.4_file.LOG
 
-	--- (files =~ search pattern: 1)
-	--- files to copy (listed): 1   (<=1)
+	--- (files =~ search pattern: 2)
+	--- files to copy (listed): 2   (<=2)
 	Do you want to copy here this file list? (y/ Y(=>log)/ *):
 
 

@@ -8,7 +8,7 @@
 # If folder name is too long it is abreviated inserting '...' in the
 # middle and erasing chars to just $CHARS_PER_DIRECTORY chars per directory.
 # Use:
-# cpr [-#hrnNyY] ['/FILTER_REGEX/' [PATH]]
+# cpr [-#hnNyY] [ '/FILTER_REGEX/' [PATH] ]
 # 
 # by circulosmeos 201809 (based on `rnm` script by circulosmeos)
 # released under GPL 3 //www.gnu.org/licenses/gpl-3.0.en.html
@@ -20,7 +20,7 @@ use File::stat; # in order to use a regex as: rnm -l '$c=stat($_)->mtime; s/(.+)
 use Encode;
 use File::Copy qw(copy);
 
-my $RNM_VERSION = '
+my $CPR_VERSION = '
 Written by circulosmeos (//github.com/circulosmeos)
 GPL v3 (//www.gnu.org/licenses/gpl-3.0.en.html)
 version 2018-09.15
@@ -84,7 +84,7 @@ if ( $#ARGV <= 0 && -p STDIN ) {
 ERROR:
 filter have incorrect format:
 received:        '$stdin_parameters'
-whilst expected: '[-#hrnNyY] "/FILTER_REGEX/" ["PATH"]'
+whilst expected: '[-#hnNyY] "/FILTER_REGEX/" ["PATH"]'
 Nothing has been done.
 
 INCORRECT_PARAMETERS
@@ -95,7 +95,7 @@ INCORRECT_PARAMETERS
     $stdin_parameters.='  '; # add final spaces to aid in parsing incomplete parameters
     (($parameters, $pattern, $path_parameter) =
         $stdin_parameters =~
-            m#^ *(\-[\dhlrnNyY]+ +)?(${QUOTES}?.*?${QUOTES}?) +(${QUOTES}?.*?${QUOTES}?)$#) ||
+            m#^ *(\-[\dhlnNyY]+ +)?(${QUOTES}?.*?${QUOTES}?) +(${QUOTES}?.*?${QUOTES}?)$#) ||
                 do {
                     $stdin_parameters = substr( $stdin_parameters, 0, -2 ); # i push \s in, i pop it again
                     print_message( $stdin_parameters_error->() );
@@ -129,7 +129,7 @@ INCORRECT_PARAMETERS
     $pattern = shift @ARGV;
 
     if ( $pattern =~ /^\-\w+$/ ) {
-        if ( $pattern =~ /^\-[\dhlrnNyY]+$/ ) {
+        if ( $pattern =~ /^\-[\dhlnNyY]+$/ ) {
             $parameters = $pattern;
             if ( $parameters =~ /h/ ) {
                 $FULL_HELP = 1;
@@ -137,7 +137,7 @@ INCORRECT_PARAMETERS
             }
             ($pattern = shift @ARGV);
         } else {
-            print "Parameters contain unrecognized options: '$pattern'\nwhilst expected: '-[#hrnNyY]'\n";
+            print "Parameters contain unrecognized options: '$pattern'\nwhilst expected: '-[#hnNyY]'\n";
             exit 1;
         }
     }
@@ -730,7 +730,7 @@ All the copying actions can be exported to a text file.
 
 Use:
 
-  cpr [-#hrnNyY] ['/FILTER_REGEX/' [PATH]]
+  cpr [-#hnNyY] [ '/FILTER_REGEX/' [PATH] ]
 
 where '/FILTER_REGEX/' is a regular expression match pattern.
 If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
@@ -739,7 +739,7 @@ If PATH is not indicated, '.' is used (current path).
 Please note that in linux simple quotation marks are preferred: '' 
 whilst in Windows double quotation marks are needed: ""
 
-  -#: a number indicating how much files at most will be copied 
+  -#: a number indicating how many files at most will be copied
       from each subdirectory. For example: `-21`
 
   -h: show full help with examples.
@@ -815,4 +815,4 @@ MAN_PAGE_FULL
 
 }
 
-die $RNM_VERSION;
+die $CPR_VERSION;
