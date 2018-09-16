@@ -1,10 +1,10 @@
 # copy files recursively under subdirectories, in Windows and linux
 
 **Copy** to current path files searched with Perl regular 
-expressions (regex) **recursively** under subdirectories, 
-in linux and Windows, with UTF-8 support.
+expressions (regex) **recursively** under subdirectories,
+in linux and Windows, with UTF-8 support.    
 Copied files retain the directories from which they were copied,
-separated with '**_**' chars.
+separated with '**_**' chars.    
 If folder name is too long it is abreviated inserting '**...**' in the
 middle and erasing chars to just 17 chars per directory.
 
@@ -61,17 +61,17 @@ As you can see, the command shows a list of actions to execute, and requires pre
 
 ## Examples of use:
 
-	\$ cpr -1 '/\.jpg\$/'
+	$ cpr -1 '/\.jpg$/'
 
 This copies one jpg image from each and every subdirectory under
 the current path, to the current directory.
 
-	\$ cpr '/log\$/' /home
+	$ cpr '/log$/' /home
 
 This copies all files whose name end with 'log' from each and 
 every subdirectory under '/home', to the current path.
 
-	\$ cpr -N '/report/i' /works
+	$ cpr -N '/report/i' /works
 
 This creates a text file containing the path and filename 
 of all files under '/works' containing the word 'report'

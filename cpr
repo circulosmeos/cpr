@@ -1,7 +1,8 @@
 #!/usr/bin/env perl
 #
 # Copy to current path files (not folders) searched with Perl regular 
-# expressions (regex), in linux and Windows, with UTF-8 support.
+# expressions (regex) recursively under subdirectories,
+# in linux and Windows, with UTF-8 support.
 # Copied files retain the directories from which they were copied,
 # separated with $DIRECTORY_SEPARATOR chars.
 # If folder name is too long it is abreviated inserting '...' in the
@@ -445,7 +446,7 @@ sub filter_list {
 
     my $fpath=$File::Find::dir;
     # File::Find::name is the complete file path = { path + filename }
-    my ($fname) = ($File::Find::name =~ m#^${File::Find::dir}/(.+)$#);
+    my ($fname) = ($File::Find::name =~ m#^\Q${File::Find::dir}\E/(.+)$#);
     if ( -d $File::Find::name && !$RECURSIVE && $fname ne '' && $fname ne '.' && $fname ne '..') {
         $File::Find::prune = 1; # do not recurse
     }
@@ -714,7 +715,8 @@ SHOW_MAN_PAGE:
 print <<MAN_PAGE_SHORT1;
 
 Copy to current path files (not folders) searched with Perl regular 
-expressions filters, in linux and Windows, with UTF-8 support.
+expressions (regex) recursively under subdirectories,
+in linux and Windows, with UTF-8 support.
 Copied files retain the directories from which they were copied
 prepended in their name, separated with '$DIRECTORY_SEPARATOR' chars.
 If folder name is too long it is abreviated inserting '...' in the 
@@ -732,7 +734,7 @@ Use:
 
 where '/FILTER_REGEX/' is a regular expression match pattern.
 If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
-If PATH is not indicated, "." is used (current path).
+If PATH is not indicated, '.' is used (current path).
 
 Please note that in linux simple quotation marks are preferred: '' 
 whilst in Windows double quotation marks are needed: ""
