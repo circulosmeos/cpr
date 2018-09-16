@@ -46,7 +46,7 @@ in general, even with UTF-8 fonts (see below). In Windows, if stdin is used,
 
 As you can see, the command shows a list of actions to execute, and requires previous confirmation:
 
-	C:\temp> cpr /LOG$/
+	C:\temp> cpr "/LOG$/"
 
 	Using:
 	        path:                   '.'
@@ -107,3 +107,5 @@ based on [`rnm`](https://github.com/circulosmeos/rnm)
 ## license
 [GPL v3](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
+## disclaimer
+This code is provided "as is", without warranty of any kind, express or implied.
