@@ -6,7 +6,10 @@ in linux and Windows, with UTF-8 support.
 Copied files retain the directories from which they were copied,
 separated with '**_**' chars.    
 If folder name is too long it is abreviated inserting '**...**' in the
-middle and erasing chars to just 17 chars per directory.
+middle and erasing chars to just 17 chars per directory.    
+If a filename already exists in current path when copying, a number
+(starting at 0001) will be appended to the copied filename, and so `cpr`
+never will overwrite any file.
 
 ## Use:
 
@@ -24,7 +27,7 @@ whilst in Windows double quotation marks are needed: ""
 
 **-h**: show full help with examples.
 
-**-n**: when asked for confirmation a "NO" is automatically answered.
+**-n**: when asked for confirmation a "NO" is automatically answered.   
 **-N**: as `-n`, but output is also written to a log file in current path.
 
 **-p**: preserve original filename. Without `-p` the path to each file
@@ -33,7 +36,7 @@ whilst in Windows double quotation marks are needed: ""
 **-r**: remove path passed as parameted from file prefixes.
       Note that `-p` makes `-r` redundant.
 
-**-y**: when asked for confirmation a "YES" is automatically answered.
+**-y**: when asked for confirmation a "YES" is automatically answered.   
 **-Y**: as `-y`, but output is also written to a log file in current path.
 
 The command shows a list of changes to be made, 
