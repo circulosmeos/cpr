@@ -8,7 +8,7 @@
 # If folder name is too long it is abreviated inserting '...' in the
 # middle and erasing chars to just $CHARS_PER_DIRECTORY chars per directory.
 # Use:
-# cpr [-#hnNyY] [ '/FILTER_REGEX/' [PATH] ]
+# cpr [-#hnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 # 
 # by circulosmeos 201809 (based on `rnm` script by circulosmeos)
 # released under GPL 3 //www.gnu.org/licenses/gpl-3.0.en.html
@@ -70,6 +70,7 @@ my $TREAT_DIRECTORIES = 0; # this script doesn't treat full directories
 my $FULL_HELP = 0;
 my $NUMBER_OF_FILES_TO_BE_COPIED = 0;
 my $REMOVE_PATH_PARAMETER = 0; # removes path passed as parameted from file prefixes
+my $PRESERVE_ORIGINAL_FILENAME = 0; # do not prepend path to files on their name
 my ($parameters, $pattern, $path_parameter) = ('', '', '', '');
 
 if ( $#ARGV <= 0 && -p STDIN ) {
@@ -84,7 +85,7 @@ if ( $#ARGV <= 0 && -p STDIN ) {
 ERROR:
 filter have incorrect format:
 received:        '$stdin_parameters'
-whilst expected: '[-#hnNyY] "/FILTER_REGEX/" ["PATH"]'
+whilst expected: '[-#hnNpryY] "/FILTER_REGEX/" ["PATH"]'
 Nothing has been done.
 
 INCORRECT_PARAMETERS
@@ -95,7 +96,7 @@ INCORRECT_PARAMETERS
     $stdin_parameters.='  '; # add final spaces to aid in parsing incomplete parameters
     (($parameters, $pattern, $path_parameter) =
         $stdin_parameters =~
-            m#^ *(\-[\dhlnNyY]+ +)?(${QUOTES}?.*?${QUOTES}?) +(${QUOTES}?.*?${QUOTES}?)$#) ||
+            m#^ *(\-[\dlhnNpryY]+ +)?(${QUOTES}?.*?${QUOTES}?) +(${QUOTES}?.*?${QUOTES}?)$#) ||
                 do {
                     $stdin_parameters = substr( $stdin_parameters, 0, -2 ); # i push \s in, i pop it again
                     print_message( $stdin_parameters_error->() );
@@ -129,7 +130,7 @@ INCORRECT_PARAMETERS
     $pattern = shift @ARGV;
 
     if ( $pattern =~ /^\-\w+$/ ) {
-        if ( $pattern =~ /^\-[\dhlnNyY]+$/ ) {
+        if ( $pattern =~ /^\-[\dhlnNpryY]+$/ ) {
             $parameters = $pattern;
             if ( $parameters =~ /h/ ) {
                 $FULL_HELP = 1;
@@ -137,7 +138,7 @@ INCORRECT_PARAMETERS
             }
             ($pattern = shift @ARGV);
         } else {
-            print "Parameters contain unrecognized options: '$pattern'\nwhilst expected: '-[#hnNyY]'\n";
+            print "Parameters contain unrecognized options: '$pattern'\nwhilst expected: '-[#hnNpryY]'\n";
             exit 1;
         }
     }
@@ -178,6 +179,7 @@ if ($parameters ne '') {
     # -h was previously processed and implied immediate end.
     #$RECURSIVE = 1 if $parameters =~ /r/; # this script always descend directories recursively
     $REMOVE_PATH_PARAMETER = 1 if $parameters =~ /r/;
+    $PRESERVE_ORIGINAL_FILENAME = 1 if $parameters =~ /p/;
     $LS_STYLE = 1  if $parameters =~ /l/;
     # negative answers take precedence over affirmative ones, and writes to log over don'ts
     $ANSWER = 'y'  if $parameters =~ /y/;
@@ -231,7 +233,8 @@ if ($LS_STYLE) {
 #print "\trecursive:   \t\t" . (($RECURSIVE)?'YES':'no') . "\n" if (!$LS_STYLE); # this script always descend directories recursively
 #print "\ttreat directories:\t" . (($TREAT_DIRECTORIES)?'YES':'no') . "\n"; # this script doesn't treat full directories
 print "\tcopy at most:\t$NUMBER_OF_FILES_TO_BE_COPIED files\n" if ( $NUMBER_OF_FILES_TO_BE_COPIED > 0 );
-print_message( "\tpath '$path_parameter' will be omitted from local filenames.\n" ) if ( $REMOVE_PATH_PARAMETER );
+print_message( "\tpath '$path_parameter' will be omitted from local filenames.\n" ) if ( $REMOVE_PATH_PARAMETER && !$PRESERVE_ORIGINAL_FILENAME);
+print "\tfilenames will not have their path prepended.\n" if $PRESERVE_ORIGINAL_FILENAME;
 print "\tWARNING!:\t\tWILL NOT ASK FOR CONFIRMATION!\t" if $ANSWER=~/y/i;
 print "\n";
 
@@ -606,33 +609,39 @@ sub process_file_list {
         # convert path + filename in a local filename
         $d .= $PATH_SEPARATOR;
         $local_filename = '';
-        my $remove_path_parameter_counter = 0;
-        # https://stackoverflow.com/questions/7580129/perl-iterate-through-each-match
-        while ( $d =~ m#([^\Q$PATH_SEPARATOR\E]+)\Q$PATH_SEPARATOR\E#g ) {
-            my $directory = $1;
-            next if $directory =~ m#^\.$#;
-            if ( $directory =~ m#^$path_parameter# && $REMOVE_PATH_PARAMETER == 1
-                # # to avoid double omissions of a repited directory in the path:
-                && $remove_path_parameter_counter == 0
-                ) {
-                $remove_path_parameter_counter++;
-                next;
+        if ( ! $PRESERVE_ORIGINAL_FILENAME ) {
+
+            my $remove_path_parameter_counter = 0;
+            # https://stackoverflow.com/questions/7580129/perl-iterate-through-each-match
+            while ( $d =~ m#([^\Q$PATH_SEPARATOR\E]+)\Q$PATH_SEPARATOR\E#g ) {
+                my $directory = $1;
+                next if $directory =~ m#^\.$#;
+                if ( $path_parameter !~ /^\.$\Q$PATH_SEPARATOR\E?$/
+                    && $directory =~ m#^\Q$path_parameter\E# 
+                    && $REMOVE_PATH_PARAMETER == 1
+                    # # to avoid double omissions of a repited directory in the path:
+                    && $remove_path_parameter_counter == 0
+                    ) {
+                    $remove_path_parameter_counter++;
+                    next;
+                }
+                if ( length( $directory ) > $CHARS_PER_DIRECTORY ) {
+                    $local_filename .= substr( $directory, 0, int( ($CHARS_PER_DIRECTORY-3)/2 ) ) .
+                                        '...' .
+                                        substr( $directory, - (int( ($CHARS_PER_DIRECTORY-3)/2 )) );
+                } else {
+                    $local_filename .= $directory;
+                }
+                $local_filename .= $DIRECTORY_SEPARATOR;
             }
-            if ( length( $directory ) > $CHARS_PER_DIRECTORY ) {
-                $local_filename .= substr( $directory, 0, int( ($CHARS_PER_DIRECTORY-3)/2 ) ) .
-                                    '...' .
-                                    substr( $directory, - (int( ($CHARS_PER_DIRECTORY-3)/2 )) );
-            } else {
-                $local_filename .= $directory;
-            }
-            $local_filename .= $DIRECTORY_SEPARATOR;
+
         }
         $local_filename .= $old_name;
 
         $counter++ if ( ! $ACTION );
+
         if (@PATH_LIST) {
-            $_=$PATH_LIST[$i]. $PATH_SEPARATOR .$_;
-            $old_name=$PATH_LIST[$i]. $PATH_SEPARATOR .$old_name;
+            $old_name = $PATH_LIST[$i]. $PATH_SEPARATOR .$old_name;
         }
 
 
@@ -661,7 +670,6 @@ sub process_file_list {
                 if ( $OS_WINDOWS ) { 
                     # https://docs.microsoft.com/en-us/previous-versions/tn-archive/ee198727(v%3dtechnet.10)
                     $file_exists = 1 if ( $fso->FileExists( $new_local_filename ) );
-                    Win32::OLE->LastError(0); # reset Win32::OLE->LastError() value
                 } else {
                     $file_exists = 1 if ( -e $new_local_filename );
                 }
@@ -674,6 +682,7 @@ sub process_file_list {
                     last;
                 }
             }
+            Win32::OLE->LastError(0) if $OS_WINDOWS; # reset Win32::OLE->LastError() value
             $local_filename = $new_local_filename;
 
             $ERROR=0;
@@ -730,7 +739,7 @@ All the copying actions can be exported to a text file.
 
 Use:
 
-  cpr [-#hnNyY] [ '/FILTER_REGEX/' [PATH] ]
+  cpr [-#hnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 
 where '/FILTER_REGEX/' is a regular expression match pattern.
 If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
@@ -763,6 +772,12 @@ print <<MAN_PAGE_SHORT2;
 
   -n: when asked for confirmation a "NO" is automatically answered.
   -N: as "-n", but output is also written to a log file in current path.
+
+  -p: preserve original filename. Without `-p` the path to each file
+      is prepended to the filename.
+
+  -r: remove path passed as parameted from file prefixes.
+      Note that `-p` makes `-r` redundant.
 
   -y: when asked for confirmation a "YES" is automatically answered.
   -Y: as "-y", but output is also written to a log file in current path.

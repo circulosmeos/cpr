@@ -10,7 +10,7 @@ middle and erasing chars to just 17 chars per directory.
 
 ## Use:
 
-	cpr [-#hnNyY] [ '/FILTER_REGEX/' [PATH] ]
+	cpr [-#hnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 
 where '/FILTER_REGEX/' is a regular expression match pattern.
 If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
@@ -26,6 +26,12 @@ whilst in Windows double quotation marks are needed: ""
 
 **-n**: when asked for confirmation a "NO" is automatically answered.
 **-N**: as `-n`, but output is also written to a log file in current path.
+
+**-p**: preserve original filename. Without `-p` the path to each file
+      is prepended to the filename.
+
+**-r**: remove path passed as parameted from file prefixes.
+      Note that `-p` makes `-r` redundant.
 
 **-y**: when asked for confirmation a "YES" is automatically answered.
 **-Y**: as `-y`, but output is also written to a log file in current path.
