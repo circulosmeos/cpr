@@ -1,0 +1,816 @@
+#!/usr/bin/env perl
+#
+# Copy to current path files (not folders) searched with Perl regular 
+# expressions (regex), in linux and Windows, with UTF-8 support.
+# Copied files retain the directories from which they were copied,
+# separated with $DIRECTORY_SEPARATOR chars.
+# If folder name is too long it is abreviated inserting '...' in the
+# middle and erasing chars to just $CHARS_PER_DIRECTORY chars per directory.
+# Use:
+# cpr [-#hrnNyY] ['/FILTER_REGEX/' [PATH]]
+# 
+# by circulosmeos 201809 (based on `rnm` script by circulosmeos)
+# released under GPL 3 //www.gnu.org/licenses/gpl-3.0.en.html
+# 
+use strict;
+use File::Find;
+use POSIX qw(strftime);
+use File::stat; # in order to use a regex as: rnm -l '$c=stat($_)->mtime; s/(.+)/$c/' '-rt'
+use Encode;
+use File::Copy qw(copy);
+
+my $RNM_VERSION = '
+Written by circulosmeos (//github.com/circulosmeos)
+GPL v3 (//www.gnu.org/licenses/gpl-3.0.en.html)
+version 2018-09.15
+
+';
+
+my $fso; # for Windows Win32::OLE Scripting.FileSystemObject
+
+BEGIN {
+    if ( $^O=~/win32/i ) {
+        eval q{
+            # https://www.perlmonks.org/?node_id=1170561
+            # by nikosv on Sep 02, 2016 at 04:32 UTC
+            # https://www.perlmonks.org/?node_id=250957
+            # by t'mo (Pilgrim) on Apr 18, 2003 at 05:26 UTC
+            use Win32::Console;
+            Win32::Console::OutputCP( 65001 );
+            use Win32::OLE qw(in);
+            binmode(STDIN, ":utf8");
+            binmode STDOUT;
+            use utf8;
+            Win32::OLE->Option(CP => Win32::OLE::CP_UTF8);
+            $fso = Win32::OLE->new('Scripting.FileSystemObject');
+            }
+    }
+}
+
+my $OS_WINDOWS=(($^O=~/win32/i)?1:0);
+
+my $PATH_SEPARATOR = ( ($OS_WINDOWS)? '\\' : '/' );
+my $QUOTES         = ( ($OS_WINDOWS)? '"'  : "['\"]" );
+
+# Copied files retain the directories from which they were copied,
+# separated with $DIRECTORY_SEPARATOR chars.
+# If folder name is too long it is abreviated inserting '...' in the
+# middle and erasing chars to just $CHARS_PER_DIRECTORY chars per directory.
+# Take care that it be pathname-safe:
+my $DIRECTORY_SEPARATOR = '_';
+# If folder name is too long it is abreviated inserting '...' in the
+# middle and erasing chars to just $CHARS_PER_DIRECTORY chars per directory.
+my $CHARS_PER_DIRECTORY = 17;
+
+my $RECURSIVE = 1; # this script always descend directories recursively
+my $LS_STYLE = 0;
+my $ANSWER ='';
+my $TREAT_DIRECTORIES = 0; # this script doesn't treat full directories
+my $FULL_HELP = 0;
+my $NUMBER_OF_FILES_TO_BE_COPIED = 0;
+my $REMOVE_PATH_PARAMETER = 0; # removes path passed as parameted from file prefixes
+my ($parameters, $pattern, $path_parameter) = ('', '', '', '');
+
+if ( $#ARGV <= 0 && -p STDIN ) {
+    # Read parameters from STDIN.
+    # This is compulsory in order to use UTF-8 parameters in Windows,
+    # for example: C:\> echo "/こ/" "temp" | cpr
+
+    my $stdin_parameters;
+
+    # https://www.perlmonks.org/?node_id=1148962
+    my $stdin_parameters_error = sub { <<INCORRECT_PARAMETERS;
+ERROR:
+filter have incorrect format:
+received:        '$stdin_parameters'
+whilst expected: '[-#hrnNyY] "/FILTER_REGEX/" ["PATH"]'
+Nothing has been done.
+
+INCORRECT_PARAMETERS
+    };
+
+    $stdin_parameters = <STDIN>;
+    chomp $stdin_parameters;
+    $stdin_parameters.='  '; # add final spaces to aid in parsing incomplete parameters
+    (($parameters, $pattern, $path_parameter) =
+        $stdin_parameters =~
+            m#^ *(\-[\dhlrnNyY]+ +)?(${QUOTES}?.*?${QUOTES}?) +(${QUOTES}?.*?${QUOTES}?)$#) ||
+                do {
+                    $stdin_parameters = substr( $stdin_parameters, 0, -2 ); # i push \s in, i pop it again
+                    print_message( $stdin_parameters_error->() );
+                    exit 1;
+                };
+    if ( $pattern eq '' ) {
+        if ( $parameters =~ /l/ ) {
+            $pattern = '';    # implicit pattern with ls style is nothing
+        } else {
+            $pattern = '/./'; # implicit pattern (all)
+        }
+    }
+    $pattern = $1 if $pattern=~/^${QUOTES}(.*)${QUOTES}/;
+    if ( $path_parameter=~/^${QUOTES}(.*)${QUOTES}/ ) {
+        $path_parameter = $1;
+    } elsif ( $path_parameter =~ /^\. +$/ ) { # patch unquoted param for current path
+        $path_parameter='.';
+    } elsif ( $path_parameter =~ /^\s*$/ ) { # implicit path_parameter is current path
+        $path_parameter='.';
+    } else {
+        print "Please, use quotes around the path in order to avoid ambiguities\n";
+        exit 1;
+    }
+    $parameters = shift @ARGV if ( $#ARGV==0 &&
+            $parameters eq '' # parameters on pipe take precedence over cmdline
+        );
+
+} else {
+    # parameters passed after command, like usual
+
+    $pattern = shift @ARGV;
+
+    if ( $pattern =~ /^\-\w+$/ ) {
+        if ( $pattern =~ /^\-[\dhlrnNyY]+$/ ) {
+            $parameters = $pattern;
+            if ( $parameters =~ /h/ ) {
+                $FULL_HELP = 1;
+                goto SHOW_MAN_PAGE;
+            }
+            ($pattern = shift @ARGV);
+        } else {
+            print "Parameters contain unrecognized options: '$pattern'\nwhilst expected: '-[#hrnNyY]'\n";
+            exit 1;
+        }
+    }
+
+    if ( $parameters=~/l/ ) {
+        if ( $pattern =~ m#^$# ) {
+            $pattern = ''; # accept empty "search pattern" if `rnm -l` => `ls -1ap` w/o any more parameters
+        }
+    } else {
+        if ( $pattern =~ m#^\Q$PATH_SEPARATOR\E?\.?\Q$PATH_SEPARATOR\E?$# ) {
+            $pattern = '/./'; # accept empty "search pattern" if `rnm [-rd]*
+                              # with the meaning: "all filenames" (in current path)
+        }
+    }
+
+    ($path_parameter = shift @ARGV);
+
+}
+
+# implicit path is actual path:
+$path_parameter='.' if $path_parameter eq '';
+
+# remove ending path separator just for pretty printing:
+if ($path_parameter =~ m#\Q$PATH_SEPARATOR\E$#) {
+    $path_parameter = substr($path_parameter, 0, -1)
+        unless ( $OS_WINDOWS && $path_parameter =~ /^[a-z]:\\$/i);
+        # do not remove last $PATH_SEPARATOR if $OS_WINDOWS, because it is needed iif
+        # it refers to the root path of a disk.
+} elsif ( $OS_WINDOWS && $path_parameter =~ /^[a-z]:$/i ) {
+    # add a $PATH_SEPARATOR if $OS_WINDOWS, because it is needed iif
+    # it refers to the root path of a disk.
+    $path_parameter.='\\';
+}
+
+if ($parameters ne '') {
+    # cpr: number of files to copy at most from each subdirectory
+    $NUMBER_OF_FILES_TO_BE_COPIED = $1 if $parameters =~ /(\d+)/;
+    # -h was previously processed and implied immediate end.
+    #$RECURSIVE = 1 if $parameters =~ /r/; # this script always descend directories recursively
+    $REMOVE_PATH_PARAMETER = 1 if $parameters =~ /r/;
+    $LS_STYLE = 1  if $parameters =~ /l/;
+    # negative answers take precedence over affirmative ones, and writes to log over don'ts
+    $ANSWER = 'y'  if $parameters =~ /y/;
+    $ANSWER = 'Y'  if $parameters =~ /Y/;
+    $ANSWER = 'n'  if $parameters =~ /n/;
+    $ANSWER = 'N'  if $parameters =~ /N/;
+    #$TREAT_DIRECTORIES = 1 if $parameters =~ /d/; # this script doesn't treat full directories
+}
+
+#die "\nERROR: \nmodifiers -l and -r are mutually exclusive.\nNothing has been done.\n\n" 
+#    if ($RECURSIVE && $LS_STYLE);
+
+if ( $LS_STYLE == 0 && $pattern !~ /^\/.*\/\w*$/ ) {
+    print_message( "\nERROR: \nthe regex: '$pattern'\nhas not the correct format: '/.../'\n" );
+    if ( $OS_WINDOWS ) {
+        print "In Windows, please use double quotes (\") around your parameters.\n";
+    }
+    print "Nothing has been done.\n\n";
+    exit;
+}
+
+
+if ( $^O=~/win32/i ) {
+    eval q{
+        binmode(STDIN);
+    }
+}
+
+
+my @FILE_LIST=();
+my @PATH_LIST=();
+# put directories at the end:
+my @FILE_LIST_2=();
+my @PATH_LIST_2=();
+
+my $fLog;
+
+
+print "Using:\n";
+# Use print_message() whenever UTF-8 maybe involved
+print_message( "\tpath:        \t\t\'$path_parameter\'\n" );
+if ($LS_STYLE) {
+    if ( $pattern =~ m#^(\-[^ ]+)(?: +(.+))?$# ) {
+        print_message( "\tlist:\t\t\tls -1 $1 $path_parameter/$2\n" );
+    } else {
+        print_message( "\tlist:\t\t\tls -1 $path_parameter/$pattern\n" );
+    }
+} else {
+    print_message( "\tsearch pattern:\t\t$pattern\n" );
+}
+#print "\trecursive:   \t\t" . (($RECURSIVE)?'YES':'no') . "\n" if (!$LS_STYLE); # this script always descend directories recursively
+#print "\ttreat directories:\t" . (($TREAT_DIRECTORIES)?'YES':'no') . "\n"; # this script doesn't treat full directories
+print "\tcopy at most:\t$NUMBER_OF_FILES_TO_BE_COPIED files\n" if ( $NUMBER_OF_FILES_TO_BE_COPIED > 0 );
+print_message( "\tpath '$path_parameter' will be omitted from local filenames.\n" ) if ( $REMOVE_PATH_PARAMETER );
+print "\tWARNING!:\t\tWILL NOT ASK FOR CONFIRMATION!\t" if $ANSWER=~/y/i;
+print "\n";
+
+if ( ( !$OS_WINDOWS && ! -d $path_parameter ) ||
+     (  $OS_WINDOWS && ! $fso->GetFolder($path_parameter) )
+    ) {
+    print_message( "\nERROR:\nPath '$path_parameter' is not a valid directory.\n" );
+    exit 1;
+}
+
+if ($LS_STYLE) {
+
+    my $ls_recursive = 0;
+    my $path = '';
+    my $previous_line = '';
+    my @ls_file_list;
+
+    if ( $pattern =~ m#^(\-[^ ]+)(?: +(.+))?$# ) {
+        @ls_file_list=`ls -1a -p $1 ${path_parameter}/$2`;
+    } else {
+        @ls_file_list=`ls -1a -p ${path_parameter}/$pattern`;
+    }
+
+    if ( $pattern =~ /\-[^ ]*R/ ) {
+        # with `ls -R`, `ls` prepends the path to directories
+        $ls_recursive = 1;
+    }
+    if ( $pattern =~ /\*/ ) {
+        # with `ls *`, `ls` does not prepend the path to directories
+        $ls_recursive = 2;
+        $path = $path_parameter;
+    }
+
+    # @ls_file_list may list a directory,
+    # but it is not indicated in the list,
+    # so let's guess it:
+    # (only $ls_recursive==2 affected (using *), because with -R
+    # only the case where an empty dir is listed is not treated here...
+    # but that can be left aside as a pathological case)
+    if ( $#ls_file_list > -1 &&
+         $ls_recursive == 2 ) {
+        $pattern =~ m#^(\-[^ ]+)(?: +(.+))?$#;
+        my @ls_file_list_d = `ls -1a -p -d ${path_parameter}/$2`;
+        if ( $#ls_file_list_d == 0 &&
+             -d $ls_file_list_d[0] ) {
+            # There's a directory with elements inside it
+            chomp $ls_file_list_d[0];
+            $path = substr( $ls_file_list_d[0],0,-1 ); # remove trailing '/'
+            # but.... wait! this directory must be affected by the regex also!
+            # and the easiest way is by simulating a ls output:
+            unshift @ls_file_list, $path . ':';
+        }
+    }
+
+    # filter empty lines and parse files to *_LIST , and directories to *_LIST_2
+    foreach my $line (@ls_file_list) {
+        chomp $line;
+        my $file = $line;
+        my $treat_dir = 0;
+
+        if ( $line !~ /^ ?$/ ) {
+
+            if ( $ls_recursive == 1 &&  # `ls -R` style
+                 $line =~ m#^(?:\./)?(.*):$# && $previous_line eq '' ) {
+                # this is a directory collection, so retain
+                # and properly store it with consecutive files
+                $path = $1;
+                $path = $path_parameter if $path eq '';
+                $treat_dir = 1;
+            } elsif ( $ls_recursive == 2 ) { # `ls *` style
+                if ( $line =~ m#^(.+):$# && $previous_line eq '' ) {
+                    # this is a directory collection, so retain
+                    # and properly store it with consecutive files
+                    $path = $1;
+                    $treat_dir = 1;
+                } else {
+                    # with `ls *` path is prepended, so it must be removed
+                    # to obtain path + filename
+                    if ( $line =~ m#^\Q$path_parameter\E/(.+)$# ) {
+                        $file = $1;
+                        $path = $path_parameter;
+                    } else {
+                        ; # ???
+                    }
+                }
+            } else {
+                $path = $path_parameter if $path eq '';
+            }
+
+            if ( $treat_dir ) {
+                if ( $path ne '.' ) {
+                    # put directories at the end
+                    my ($path2, $file2) = ($path =~ m#^(.+?)(?:/([^/]+))?$#);
+                    ($path2, $file2) = ('.', $path2) if $file2 eq '';
+                    if ( $OS_WINDOWS ) {
+                        # mark Windows folders (for later processing)
+                        $file2 .= $PATH_SEPARATOR;
+                    }
+                    push @FILE_LIST_2, $file2;
+                    push @PATH_LIST_2, $path2;
+                }
+                next;
+            }
+
+            if ( $line !~ m#^\.{1,2}/?$# && # escape implied directories . and ..
+                 $line !~ /^\.:$/ ) { # escape implied directory with -R '.:'
+
+                if ( $line =~ m#^(.+)[/]$# ) {
+                    # remove directory (`ls -p`) identifiers from filename
+                    $file = $1;
+                } elsif ( $file =~ m#^./(.+)$# ) {
+                    $ file = $1;
+                }
+
+                if ( $line =~ m#^(.+)/$# ) {
+                    # this is a subdirectory, not a file
+                    if ( $OS_WINDOWS ) {
+                        # mark Windows folders (for later processing)
+                        $file .= $PATH_SEPARATOR;
+                    }
+                    # put directories at the end
+                    push @FILE_LIST_2, $file;
+                    push (@PATH_LIST_2, $path) if $ls_recursive;
+                } else {
+                    # do not treat files directly under current path, but under subfolders:
+                    if ( $path !~ /^\.(\Q\$PATH_SEPARATOR\E)?$/ ) {
+                        push @FILE_LIST, $file;
+                        push (@PATH_LIST, $path) if $ls_recursive;                        
+                    }
+                }
+            }
+
+        } else {
+            # end of a collection of files under a directory
+            $path = '';
+        }
+
+        $previous_line = $line;
+    }
+
+} else {
+
+    if ( $^O =~ /^mswin/i ) {
+
+        sub visit {
+            my $filename = shift;
+            my $path = shift;
+            # remove last (compulsory) slash of the disk unit alone, for pretty printing:
+            $path = $1 if $path =~ /^([a-z]:)\\$/i;
+            if ( eval( '$filename=~'. $pattern )
+                # do not treat files directly under current path, but under subfolders:
+                && $path !~ /^\.(\Q\$PATH_SEPARATOR\E)?$/ 
+            ) {
+                push @FILE_LIST, $filename;
+                push @PATH_LIST, $path;
+            }
+        }
+
+        sub scan_directory {
+            my $path = shift;
+            my $folder = $fso->GetFolder( $path );
+            foreach my $subdir ( in $folder->SubFolders ) {
+                scan_directory( $path . $PATH_SEPARATOR . $subdir->Name ) if $RECURSIVE;
+            }
+            foreach my $file ( in $folder->Files ) { visit( $file->Name, $path, 0 ) }
+        }
+
+        scan_directory( ($path_parameter ne '')? $path_parameter : '.' );
+
+    } else {
+
+        find( { wanted => \&filter_list,
+                no_chdir => 1,  # do not descend to dirs, but use complete path
+                preprocess => sub { sort { $a cmp $b } @_ }, # order files
+                },
+            ($path_parameter ne '')? $path_parameter : './' );
+
+    }
+}
+
+
+&process_array( \@FILE_LIST, \@PATH_LIST,
+        ( $TREAT_DIRECTORIES?
+            ( ( $#FILE_LIST_2!=-1 )? ( $#FILE_LIST_2+1 ) :0 )
+        : 0 )
+    );
+
+
+exit(0);
+
+
+sub print_message {
+    # prints sensitive chars using encode() selectively depending on platform
+
+    my $message = shift;
+    my $fLog = shift;
+
+    if ( $OS_WINDOWS ) {
+        print encode('UTF-8', $message);
+        print ( {$$fLog} $message) if $fLog;
+    } else {
+        print $message;
+        print ( {$$fLog} decode('UTF-8', $message) ) if $fLog;
+    }
+
+}
+
+
+sub filter_list {
+    # find()+filter_list() is used only on linux, because unfortunately
+    # File:Find:name uses short MSDOS names in Windows :_(
+
+    my $fpath=$File::Find::dir;
+    # File::Find::name is the complete file path = { path + filename }
+    my ($fname) = ($File::Find::name =~ m#^${File::Find::dir}/(.+)$#);
+    if ( -d $File::Find::name && !$RECURSIVE && $fname ne '' && $fname ne '.' && $fname ne '..') {
+        $File::Find::prune = 1; # do not recurse
+    }
+
+    if (eval('$fname=~'.$pattern) && $fname ne '' && $fname ne '.' && $fname ne '..') {
+        if ( -d $File::Find::name ) {
+            # do not treat directories themselves:
+            ;
+        } else {
+            # do not treat files directly under current path, but under subfolders:
+            if ( $fpath !~ /^\.(\Q\$PATH_SEPARATOR\E)?$/ ) {            
+                push @FILE_LIST, $fname;
+                push @PATH_LIST, $fpath;
+            }
+        }
+    }
+
+}
+
+
+sub process_array {
+
+    my $LOG_FILE;
+
+    my $FILE_LIST = shift @_;
+    my $PATH_LIST = shift @_;
+    # number of directories to copy, 0 if ! $TREAT_DIRECTORIES :
+    my $number_of_directories_filtered = shift @_;
+
+    my $counter=0;
+    my $errors=0;
+
+
+    ($counter, $errors) = &process_file_list( $FILE_LIST, $PATH_LIST, 0, '');
+
+
+    print "\n";
+    if ( ! $TREAT_DIRECTORIES ) {
+        print '--- (files =~ search pattern: '. ( $#{$FILE_LIST} + 1 ) .")\n";
+        print '--- files to copy (listed): '. ( $counter + 0 ) ."\t(<=";
+    } else {
+        print '--- (files =~ search pattern: '.
+            ( $#{$FILE_LIST} + 1 - $number_of_directories_filtered ) .")\n";
+        print '--- (directories =~ search pattern: '.
+            $number_of_directories_filtered .")\n";
+        print '--- files'.
+            # cannot know # of dirs modified, but if
+            # 0 passed the filter, 0 will be modified.
+            ( ( $number_of_directories_filtered>0 )?' & directories':'' )
+            .' to copy (listed): '. ( $counter+0 ) ."\t(<=";
+    }
+    print ''. ( $#{$FILE_LIST} + 1 ) . "\)\n";
+
+    if ( $ANSWER =~ /y/i ) {
+        print "\nListed files will be copied now!\n";
+        sleep (5);
+    } elsif ( $ANSWER =~ /n/i ) {
+        ; # nothing is asked
+    } elsif ( $counter > 0 ) {
+        print 'Do you want to copy here this file list? ';
+        print '(y/ Y(=>log)/ *):';
+
+        if ( !$OS_WINDOWS ) {
+            STDOUT->flush();
+            # in the case that stdin was used to pass parameters,
+            # redirect STDIN from pipe to keyboard
+            # (this works on linux, but not on Windows (so use -y/-Y there to execute))
+            open( STDIN, "<&1" ) || print "Can't reopen STDIN: $! \n";
+        }
+
+        $ANSWER=getc;
+
+    } else {
+        print "No name adjusted to indicated parameters.\nNothing has been done.\n";
+        return;
+    }
+
+    if ( $ANSWER !~ /y/i ) {
+        print "\nCANCELLED. Nothing has been done.\n";
+        exit if $ANSWER ne 'N';
+    }
+    if ( $ANSWER eq 'Y' || $ANSWER eq 'N' ) {
+        $_ = strftime '%Y%m%d%H%M%S', localtime;
+        chomp;
+        $LOG_FILE='./cpr.'.$_.'.log';
+        if (-e $LOG_FILE) {
+            print "\nLog file won't be created because already exists '$LOG_FILE'\n";
+            $ANSWER = 'y';
+        } else {
+            open $fLog, '>:encoding(UTF-8)', $LOG_FILE or die "\nLog file '$LOG_FILE' could not be created.\n";
+            print $fLog "Copying files:\ndate: ".(scalar localtime)."\n\n";
+        }
+    }
+    print "\nACTIONS:\n" if $ANSWER=~/y/i;
+    print "\nThese actions would have been done:\n" if $ANSWER eq 'N';
+
+
+    ($counter, $errors) = &process_file_list( $FILE_LIST, $PATH_LIST, (($ANSWER=~/y/i)?1:0), $ANSWER );
+
+
+    print "\n".($counter+0)." files copied\n" if $ANSWER=~/y/i;
+    print "\n".($errors)." errors\n" if ($errors>0);
+    if ( $ANSWER eq 'Y' || $ANSWER eq 'N' ) {
+        print "\nFile log created: $LOG_FILE\n";
+        print $fLog "\n".($counter+0)." files ". (($ANSWER=~/N/i)?'would have been ':'') ."copied\n";
+        print $fLog "\n".($errors)." errors\n" if ($errors>0);
+    }
+
+    return;
+
+}
+
+
+sub process_file_list {
+
+    my @FILE_LIST = @{(shift)}; # an array passed by reference
+    my $PATH_LIST = shift;      # an array passed by reference
+    my @PATH_LIST = @$PATH_LIST if defined $PATH_LIST; # if !defined $PATH_LIST, @PATH_LIST is left undefined also
+    my $ACTION = shift;
+    my $ANSWER = shift;
+
+    my %paths_processed = ();
+    my %files_to_be_copied = ();
+    my $local_filename;
+    my $temp;
+    my $counter = '0000';
+    my $errors = 0;
+    my $ERROR;
+    my $i = -1;
+    my $old_name;
+
+    # $c can be used inside the regex for renaming,
+    # for example: rnm "$c++; s/^/$c/" "/.+/"
+    my $c='0000';
+
+    foreach $_ ( @FILE_LIST ) {
+
+        $i++;
+        chomp;
+        $old_name = $_;
+
+        # interesting variables available in this step:
+        # $c (available for r/w in regex), $counter (# of files copied so far), 
+        # $_ (filename), $f (complete filename path), $d (directory (if $RECURSIVE == 1))
+        my $d = $PATH_LIST[$i]                if @PATH_LIST;
+        my $f = $old_name;
+        $f = $d . $PATH_SEPARATOR . $old_name if @PATH_LIST;
+
+        # pwd is not included cause there's no sense in moving from pwd to pwd.
+        next if $d =~ m#^\.[/]?$#;
+
+        # at most $NUMBER_OF_FILES_TO_BE_COPIED from each and every subfolder are treated
+        next if ( $NUMBER_OF_FILES_TO_BE_COPIED > 0 && 
+            $paths_processed{$d} >= $NUMBER_OF_FILES_TO_BE_COPIED );
+        $paths_processed{$d} ++;
+
+        # convert path + filename in a local filename
+        $d .= $PATH_SEPARATOR;
+        $local_filename = '';
+        my $remove_path_parameter_counter = 0;
+        # https://stackoverflow.com/questions/7580129/perl-iterate-through-each-match
+        while ( $d =~ m#([^\Q$PATH_SEPARATOR\E]+)\Q$PATH_SEPARATOR\E#g ) {
+            my $directory = $1;
+            next if $directory =~ m#^\.$#;
+            if ( $directory =~ m#^$path_parameter# && $REMOVE_PATH_PARAMETER == 1
+                # # to avoid double omissions of a repited directory in the path:
+                && $remove_path_parameter_counter == 0
+                ) {
+                $remove_path_parameter_counter++;
+                next;
+            }
+            if ( length( $directory ) > $CHARS_PER_DIRECTORY ) {
+                $local_filename .= substr( $directory, 0, int( ($CHARS_PER_DIRECTORY-3)/2 ) ) .
+                                    '...' .
+                                    substr( $directory, - (int( ($CHARS_PER_DIRECTORY-3)/2 )) );
+            } else {
+                $local_filename .= $directory;
+            }
+            $local_filename .= $DIRECTORY_SEPARATOR;
+        }
+        $local_filename .= $old_name;
+
+        $counter++ if ( ! $ACTION );
+        if (@PATH_LIST) {
+            $_=$PATH_LIST[$i]. $PATH_SEPARATOR .$_;
+            $old_name=$PATH_LIST[$i]. $PATH_SEPARATOR .$old_name;
+        }
+
+
+        # if the formed filename has already been used, append guaranteed-unique digit 
+        if ( defined $files_to_be_copied{ $local_filename} ) { 
+            # preserve file extension
+            my ($filename, $fileextension) = $local_filename =~ m#(.+?)(\.[^\.]+)?$#;
+            $local_filename = "${filename}.$counter";
+            $local_filename .= "$fileextension" if (defined $fileextension);
+        }
+        $files_to_be_copied{$local_filename} = 1;
+
+        print_message( "$old_name\t-> \t",
+            ($ANSWER eq 'Y' || $ANSWER eq 'N')? $fLog: '' );
+
+        if ( $ACTION ) {
+
+            # if the destination file already exists, append guaranteed-unique digit 
+            # this code is repeated in order not to overwrite any file at any moment.
+            my $file_exists;
+            my $new_local_filename = $local_filename;
+            my $new_counter = '0000';
+            while ( 1 ) {
+                $file_exists = 0;
+                $new_counter++;
+                if ( $OS_WINDOWS ) { 
+                    # https://docs.microsoft.com/en-us/previous-versions/tn-archive/ee198727(v%3dtechnet.10)
+                    $file_exists = 1 if ( $fso->FileExists( $new_local_filename ) );
+                    Win32::OLE->LastError(0); # reset Win32::OLE->LastError() value
+                } else {
+                    $file_exists = 1 if ( -e $new_local_filename );
+                }
+                if ( $file_exists ) {
+                    # preserve file extension
+                    my ($filename, $fileextension) = $local_filename =~ m#(.+?)(\.[^\.]+)?$#;
+                    $new_local_filename = "${filename}.$new_counter";
+                    $new_local_filename .= "$fileextension" if (defined $fileextension);
+                } else {
+                    last;
+                }
+            }
+            $local_filename = $new_local_filename;
+
+            $ERROR=0;
+            if ( $OS_WINDOWS ) {
+                # https://technet.microsoft.com/en-us/library/ee198744.aspx
+                $fso->CopyFile( $old_name, $local_filename );
+                if ( Win32::OLE->LastError() ) {
+                    $ERROR=1;
+                    print Win32::OLE->LastError();
+                }
+            } else {
+                if ( !copy( $old_name, $local_filename ) ) {
+                    $ERROR=1;
+                }
+            }
+            if ( $ERROR==1 ) {
+                print_message( '!!! "'.$old_name."\" not copied: '$!'\n",
+                    ($ANSWER eq 'Y')? $fLog: '' );
+                $errors++;
+            } else {
+                $counter++;
+            }
+
+        }
+
+        print_message( "$local_filename\n",
+            ($ANSWER eq 'Y' || $ANSWER eq 'N')? $fLog: '' );
+
+    }
+
+    return ( $counter, $errors );
+
+}
+
+
+SHOW_MAN_PAGE:
+
+
+print <<MAN_PAGE_SHORT1;
+
+Copy to current path files (not folders) searched with Perl regular 
+expressions filters, in linux and Windows, with UTF-8 support.
+Copied files retain the directories from which they were copied
+prepended in their name, separated with '$DIRECTORY_SEPARATOR' chars.
+If folder name is too long it is abreviated inserting '...' in the 
+middle and erasing chars to just $CHARS_PER_DIRECTORY chars per directory.
+If a filename already exists in current path when copying, a number
+(starting at 0001) will be appended to the copied filename.
+
+A list of changes to be made is presented previous to any action, 
+so that you can check that everything will be correctly copied.
+All the copying actions can be exported to a text file.
+
+Use:
+
+  cpr [-#hrnNyY] ['/FILTER_REGEX/' [PATH]]
+
+where '/FILTER_REGEX/' is a regular expression match pattern.
+If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
+If PATH is not indicated, "." is used (current path).
+
+Please note that in linux simple quotation marks are preferred: '' 
+whilst in Windows double quotation marks are needed: ""
+
+  -#: a number indicating how much files at most will be copied 
+      from each subdirectory. For example: `-21`
+
+  -h: show full help with examples.
+MAN_PAGE_SHORT1
+
+# -l is difficult to use with cpr due to the recursive needs of cpr.
+#if ( $FULL_HELP == 1 ) {
+#
+#  -l: Use `ls` command modifiers as FILTER parameter, instead of a regex.
+#    print <<MAN_PAGE_FULL_LS;
+#    Limitations of -l:
+#    * USE WITH CAUTION as this JUST TRIES TO PARSE `ls` OUTPUT.
+#    * DO NOT indicate the path inside FILTER, but as last parameter.
+#    * In Windows, there must be a cygwin `ls` in the PATH, and UTF-8 
+#    is not supported.
+#MAN_PAGE_FULL_LS
+#
+#}
+
+print <<MAN_PAGE_SHORT2;
+
+  -n: when asked for confirmation a "NO" is automatically answered.
+  -N: as "-n", but output is also written to a log file in current path.
+
+  -y: when asked for confirmation a "YES" is automatically answered.
+  -Y: as "-y", but output is also written to a log file in current path.
+MAN_PAGE_SHORT2
+
+if ( $FULL_HELP == 1 ) {
+
+    print <<MAN_PAGE_FULL;
+
+The command shows a list of changes to be made, 
+which must be confirmed with 'y' (yes).
+If capital 'Y' is entered, the results are written to a log file.
+
+Parameters can also be indicated using stdin.
+
+Note for WINDOWS users:
+The stdin input for parameters is needed in Windows in order to
+use UTF-8 characters on FILTER and/or PATH. Note that a cmd
+console with UTF-8 support must be used. `CMD [/U]` isn't appropriate
+in general, even with UTF-8 fonts. In Windows, if stdin is used,
+-[yY] would be needed because input cannot be read from the keyboard.
+
+
+Examples:
+
+  \$ cpr -1 '/\.jpg\$/'
+
+    This copies one jpg image from each and every subdirectory under
+    the current path, to the current directory.
+
+  \$ cpr '/log\$/' /home
+
+    This copies all files whose name end with 'log' from each and 
+    every subdirectory under '/home', to the current path.
+
+  \$ cpr -N '/report/i' /works
+
+    This creates a text file containing the path and filename 
+    of all files under '/works' containing the word 'report'
+    on their name. (The file also contains the filename they
+    would have in case they were copied to current path.)
+    With `-n` the results are just printed on screen.
+
+In Windows, to use for example the japanese hiragana UTF-8 "の"
+char in the search pattern, stdin use is compulsory, as previously indicated.
+(Note that -y (or -Y) is needed in order to actually take actions):
+
+  C:\\temp> echo  -y "/の/"  |  cpr
+MAN_PAGE_FULL
+
+}
+
+die $RNM_VERSION;
