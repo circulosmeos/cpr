@@ -9,11 +9,13 @@ If folder name is too long it is abreviated inserting '**...**' in the
 middle and erasing chars to just 17 chars per directory.    
 If a filename already exists in current path when copying, a number
 (starting at 0001) will be appended to the copied filename, and so `cpr`
-never will overwrite any file.
+never will overwrite any file.   
+
+Files can also be moved, instead of copied (with `-M`  parameter).   
 
 ## Use:
 
-	cpr [-#hnNpryY] [ '/FILTER_REGEX/' [PATH] ]
+	cpr [-#hMnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 
 where '/FILTER_REGEX/' is a regular expression match pattern.
 If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
@@ -26,6 +28,10 @@ whilst in Windows double quotation marks are needed: ""
       from each subdirectory. For example: `-21`
 
 **-h**: show full help with examples.
+
+**-M**: MOVE files: they'll be removed from origin and moved to pwd.
+      Note that, depending on `-p` and `-r`, files will be renamed.
+      Default action (without `-M`) is COPY.
 
 **-n**: when asked for confirmation a "NO" is automatically answered.   
 **-N**: as `-n`, but output is also written to a log file in current path.
@@ -112,7 +118,7 @@ Written by [circulosmeos](mailto:loopidle@gmail.com)
 based on [`rnm`](https://github.com/circulosmeos/rnm)
 
 ## version
-2018-09.15
+2018-10.26
 
 ## license
 [GPL v3](https://www.gnu.org/licenses/gpl-3.0.en.html)
