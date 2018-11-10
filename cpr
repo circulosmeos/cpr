@@ -8,27 +8,32 @@
 # If folder name is too long it is abreviated inserting '...' in the
 # middle and erasing chars to just $CHARS_PER_DIRECTORY chars per directory.
 # Use:
-# cpr [-#hMnNpryY] [ '/FILTER_REGEX/' [PATH] ]
+# cpr [-#FhMnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 # 
 # by circulosmeos 201809 (based on `rnm` script by circulosmeos)
 # released under GPL 3 //www.gnu.org/licenses/gpl-3.0.en.html
 # 
 use strict;
+
+# these four 'use' must be exported with ListContent() to run properly
 use File::Find;
 use POSIX qw(strftime);
 use File::stat; # in order to use a regex as: rnm -l '$c=stat($_)->mtime; s/(.+)/$c/' '-rt'
 use Encode;
+
 use File::Copy qw(copy move); # default action is COPY, but MOVE (-M) is also possible (see $ACTION_MOVE)
 
 my $CPR_VERSION = '
 Written by circulosmeos (//github.com/circulosmeos)
 GPL v3 (//www.gnu.org/licenses/gpl-3.0.en.html)
-version 2018-10.26
+version 2018-11.04
 
 ';
 
+# this variable must be global in order for ListContent() to run properly
 my $fso; # for Windows Win32::OLE Scripting.FileSystemObject
 
+# this block must be exported with ListContent() to run properly
 BEGIN {
     if ( $^O=~/win32/i ) {
         eval q{
@@ -48,9 +53,10 @@ BEGIN {
     }
 }
 
+# these two variables must be global in order for ListContent() to run properly
 my $OS_WINDOWS=(($^O=~/win32/i)?1:0);
-
 my $PATH_SEPARATOR = ( ($OS_WINDOWS)? '\\' : '/' );
+
 my $QUOTES         = ( ($OS_WINDOWS)? '"'  : "['\"]" );
 
 # Copied files retain the directories from which they were copied,
@@ -65,6 +71,7 @@ my $CHARS_PER_DIRECTORY = 17;
 
 my $RECURSIVE = 1; # this script always descend directories recursively
 my $LS_STYLE = 0;
+my $NEGATED_MATCH = 0;
 my $ACTION_MOVE = 0; # default action is COPY, but MOVE (-M) is also possible
 my $ANSWER ='';
 my $TREAT_DIRECTORIES = 0; # this script doesn't treat full directories: only files are treated
@@ -86,7 +93,7 @@ if ( $#ARGV <= 0 && -p STDIN ) {
 ERROR:
 filter have incorrect format:
 received:        '$stdin_parameters'
-whilst expected: '[-#hMnNpryY] "/FILTER_REGEX/" ["PATH"]'
+whilst expected: '[-#FhMnNpryY] "/FILTER_REGEX/" ["PATH"]'
 Nothing has been done.
 
 INCORRECT_PARAMETERS
@@ -97,7 +104,7 @@ INCORRECT_PARAMETERS
     $stdin_parameters.='  '; # add final spaces to aid in parsing incomplete parameters
     (($parameters, $pattern, $path_parameter) =
         $stdin_parameters =~
-            m#^ *(\-[\dlhMnNpryY]+ +)?(${QUOTES}?.*?${QUOTES}?) +(${QUOTES}?.*?${QUOTES}?)$#) ||
+            m#^ *(\-[\dFlhMnNpryY]+ +)?(${QUOTES}?.*?${QUOTES}?) +(${QUOTES}?.*?${QUOTES}?)$#) ||
                 do {
                     $stdin_parameters = substr( $stdin_parameters, 0, -2 ); # i push \s in, i pop it again
                     print_message( $stdin_parameters_error->() );
@@ -130,8 +137,13 @@ INCORRECT_PARAMETERS
 
     $pattern = shift @ARGV;
 
-    if ( $pattern =~ /^\-\w+$/ ) {
-        if ( $pattern =~ /^\-[\dhlMnNpryY]+$/ ) {
+    if ( length($pattern) == 0 ) {
+        goto SHOW_MAN_PAGE; # brief (not FULL_HELP) help
+    }
+
+    if ( $pattern =~ /^\-\w*$/ ) {
+        # empty parameters afer '-' allowed so an implied `cpr '/./' . ` be run
+        if ( $pattern =~ /^\-[\dFhlMnNpryY]*$/ ) {
             $parameters = $pattern;
             if ( $parameters =~ /h/ ) {
                 $FULL_HELP = 1;
@@ -139,7 +151,7 @@ INCORRECT_PARAMETERS
             }
             ($pattern = shift @ARGV);
         } else {
-            print "Parameters contain unrecognized options: '$pattern'\nwhilst expected: '-[#hMnNpryY]'\n";
+            print "Parameters contain unrecognized options: '$pattern'\nwhilst expected: '-[#FhMnNpryY]'\n";
             exit 1;
         }
     }
@@ -182,6 +194,7 @@ if ($parameters ne '') {
     $REMOVE_PATH_PARAMETER = 1 if $parameters =~ /r/;
     $PRESERVE_ORIGINAL_FILENAME = 1 if $parameters =~ /p/;
     $LS_STYLE = 1 if $parameters =~ /l/;
+    $NEGATED_MATCH = 1 if $parameters =~ /F/; # -M has no sense with -l
     $ACTION_MOVE = 1 if $parameters =~ /M/;
     # negative answers take precedence over affirmative ones, and writes to log over don'ts
     $ANSWER = 'y'  if $parameters =~ /y/;
@@ -193,6 +206,9 @@ if ($parameters ne '') {
 
 #die "\nERROR: \nmodifiers -l and -r are mutually exclusive.\nNothing has been done.\n\n" 
 #    if ($RECURSIVE && $LS_STYLE);
+
+die "\nERROR: \nmodifiers -l and -M are mutually exclusive.\nNothing has been done.\n\n"
+    if ($NEGATED_MATCH && $LS_STYLE);
 
 if ( $LS_STYLE == 0 && $pattern !~ /^\/.*\/\w*$/ ) {
     print_message( "\nERROR: \nthe regex: '$pattern'\nhas not the correct format: '/.../'\n" );
@@ -211,11 +227,9 @@ if ( $^O=~/win32/i ) {
 }
 
 
-my @FILE_LIST=();
-my @PATH_LIST=();
-# put directories at the end:
-my @FILE_LIST_2=();
-my @PATH_LIST_2=();
+my $FILE_LIST; # reference to store returned @FILE_LIST from ListContent()
+my $PATH_LIST; # reference to store returned @PATH_LIST from ListContent()
+my $number_of_directories_filtered;
 
 my $fLog;
 
@@ -230,7 +244,7 @@ if ($LS_STYLE) {
         print_message( "\tlist:\t\t\tls -1 $path_parameter/$pattern\n" );
     }
 } else {
-    print_message( "\tsearch pattern:\t\t$pattern\n" );
+    print_message( "\tsearch pattern:\t\t". ($NEGATED_MATCH?' ! ':'') ."$pattern\n" );
 }
 #print "\trecursive:   \t\t" . (($RECURSIVE)?'YES':'no') . "\n" if (!$LS_STYLE); # this script always descend directories recursively
 #print "\ttreat directories:\t" . (($TREAT_DIRECTORIES)?'YES':'no') . "\n"; # this script doesn't treat full directories
@@ -253,185 +267,320 @@ if ( ( !$OS_WINDOWS && ! -d $path_parameter ) ||
     exit 1;
 }
 
-if ($LS_STYLE) {
 
-    my $ls_recursive = 0;
-    my $path = '';
-    my $previous_line = '';
-    my @ls_file_list;
-
-    if ( $pattern =~ m#^(\-[^ ]+)(?: +(.+))?$# ) {
-        @ls_file_list=`ls -1a -p $1 ${path_parameter}/$2`;
-    } else {
-        @ls_file_list=`ls -1a -p ${path_parameter}/$pattern`;
-    }
-
-    if ( $pattern =~ /\-[^ ]*R/ ) {
-        # with `ls -R`, `ls` prepends the path to directories
-        $ls_recursive = 1;
-    }
-    if ( $pattern =~ /\*/ ) {
-        # with `ls *`, `ls` does not prepend the path to directories
-        $ls_recursive = 2;
-        $path = $path_parameter;
-    }
-
-    # @ls_file_list may list a directory,
-    # but it is not indicated in the list,
-    # so let's guess it:
-    # (only $ls_recursive==2 affected (using *), because with -R
-    # only the case where an empty dir is listed is not treated here...
-    # but that can be left aside as a pathological case)
-    if ( $#ls_file_list > -1 &&
-         $ls_recursive == 2 ) {
-        $pattern =~ m#^(\-[^ ]+)(?: +(.+))?$#;
-        my @ls_file_list_d = `ls -1a -p -d ${path_parameter}/$2`;
-        if ( $#ls_file_list_d == 0 &&
-             -d $ls_file_list_d[0] ) {
-            # There's a directory with elements inside it
-            chomp $ls_file_list_d[0];
-            $path = substr( $ls_file_list_d[0],0,-1 ); # remove trailing '/'
-            # but.... wait! this directory must be affected by the regex also!
-            # and the easiest way is by simulating a ls output:
-            unshift @ls_file_list, $path . ':';
-        }
-    }
-
-    # filter empty lines and parse files to *_LIST , and directories to *_LIST_2
-    foreach my $line (@ls_file_list) {
-        chomp $line;
-        my $file = $line;
-        my $treat_dir = 0;
-
-        if ( $line !~ /^ ?$/ ) {
-
-            if ( $ls_recursive == 1 &&  # `ls -R` style
-                 $line =~ m#^(?:\./)?(.*):$# && $previous_line eq '' ) {
-                # this is a directory collection, so retain
-                # and properly store it with consecutive files
-                $path = $1;
-                $path = $path_parameter if $path eq '';
-                $treat_dir = 1;
-            } elsif ( $ls_recursive == 2 ) { # `ls *` style
-                if ( $line =~ m#^(.+):$# && $previous_line eq '' ) {
-                    # this is a directory collection, so retain
-                    # and properly store it with consecutive files
-                    $path = $1;
-                    $treat_dir = 1;
-                } else {
-                    # with `ls *` path is prepended, so it must be removed
-                    # to obtain path + filename
-                    if ( $line =~ m#^\Q$path_parameter\E/(.+)$# ) {
-                        $file = $1;
-                        $path = $path_parameter;
-                    } else {
-                        ; # ???
-                    }
-                }
-            } else {
-                $path = $path_parameter if $path eq '';
-            }
-
-            if ( $treat_dir ) {
-                if ( $path ne '.' ) {
-                    # put directories at the end
-                    my ($path2, $file2) = ($path =~ m#^(.+?)(?:/([^/]+))?$#);
-                    ($path2, $file2) = ('.', $path2) if $file2 eq '';
-                    if ( $OS_WINDOWS ) {
-                        # mark Windows folders (for later processing)
-                        $file2 .= $PATH_SEPARATOR;
-                    }
-                    push @FILE_LIST_2, $file2;
-                    push @PATH_LIST_2, $path2;
-                }
-                next;
-            }
-
-            if ( $line !~ m#^\.{1,2}/?$# && # escape implied directories . and ..
-                 $line !~ /^\.:$/ ) { # escape implied directory with -R '.:'
-
-                if ( $line =~ m#^(.+)[/]$# ) {
-                    # remove directory (`ls -p`) identifiers from filename
-                    $file = $1;
-                } elsif ( $file =~ m#^./(.+)$# ) {
-                    $ file = $1;
-                }
-
-                if ( $line =~ m#^(.+)/$# ) {
-                    # this is a subdirectory, not a file
-                    if ( $OS_WINDOWS ) {
-                        # mark Windows folders (for later processing)
-                        $file .= $PATH_SEPARATOR;
-                    }
-                    # put directories at the end
-                    push @FILE_LIST_2, $file;
-                    push (@PATH_LIST_2, $path) if $ls_recursive;
-                } else {
-                    # do not treat files directly under current path, but under subfolders:
-                    if ( $path !~ /^\.(\Q\$PATH_SEPARATOR\E)?$/ ) {
-                        push @FILE_LIST, $file;
-                        push (@PATH_LIST, $path) if $ls_recursive;                        
-                    }
-                }
-            }
-
-        } else {
-            # end of a collection of files under a directory
-            $path = '';
-        }
-
-        $previous_line = $line;
-    }
-
-} else {
-
-    if ( $^O =~ /^mswin/i ) {
-
-        sub visit {
-            my $filename = shift;
-            my $path = shift;
-            # remove last (compulsory) slash of the disk unit alone, for pretty printing:
-            $path = $1 if $path =~ /^([a-z]:)\\$/i;
-            if ( eval( '$filename=~'. $pattern )
-                # do not treat files directly under current path, but under subfolders:
-                && $path !~ /^\.(\Q\$PATH_SEPARATOR\E)?$/ 
-            ) {
-                push @FILE_LIST, $filename;
-                push @PATH_LIST, $path;
-            }
-        }
-
-        sub scan_directory {
-            my $path = shift;
-            my $folder = $fso->GetFolder( $path );
-            foreach my $subdir ( in $folder->SubFolders ) {
-                scan_directory( $path . $PATH_SEPARATOR . $subdir->Name ) if $RECURSIVE;
-            }
-            foreach my $file ( in $folder->Files ) { visit( $file->Name, $path, 0 ) }
-        }
-
-        scan_directory( ($path_parameter ne '')? $path_parameter : '.' );
-
-    } else {
-
-        find( { wanted => \&filter_list,
-                no_chdir => 1,  # do not descend to dirs, but use complete path
-                preprocess => sub { sort { $a cmp $b } @_ }, # order files
-                },
-            ($path_parameter ne '')? $path_parameter : './' );
-
-    }
-}
+( $FILE_LIST, $PATH_LIST, $number_of_directories_filtered ) =
+                &ListContent(
+                    [ $LS_STYLE,  $TREAT_DIRECTORIES,  $RECURSIVE,  $NEGATED_MATCH, 0 ],
+                    $pattern, $path_parameter
+                );
 
 
-&process_array( \@FILE_LIST, \@PATH_LIST,
-        ( $TREAT_DIRECTORIES?
-            ( ( $#FILE_LIST_2!=-1 )? ( $#FILE_LIST_2+1 ) :0 )
-        : 0 )
+&process_array( $FILE_LIST, $PATH_LIST,
+        ( $TREAT_DIRECTORIES? $number_of_directories_filtered: 0 )
     );
 
 
 exit(0);
+
+
+# return files (and directories if $TREAT_DIRECTORIES) under $path_parameter
+# that match (or doesn't if $NEGATED_MATCH) $pattern
+# If $RECURSIVE, returns subdirectories' content
+# If $LS_STYLE, $pattern is an `ls` pattern (possibly including `ls` style parameters)
+#
+# ListContent() function can be exported independently to another project
+# (see dependencies by looking for "# ... for ListContent() to run properly")
+#
+# returns: [ \@FILE_LIST, \@PATH_LIST,
+#            number of directories returned (only to inform the number),
+#            \@SHORT_FILENAME if $MSDOS_SHORT_NAMES or () if not ]
+sub ListContent {
+
+    my @FILE_LIST=();
+    my @PATH_LIST=();
+    # short path+filename for use in case $MSDOS_SHORT_NAMES:
+    my @SHORT_FILENAME=();
+    # put directories at the end:
+    my @FILE_LIST_2=();
+    my @PATH_LIST_2=();
+
+    my ( $parameters_ref, $pattern, $path_parameter ) = ( shift, shift, shift );
+
+    my ( $LS_STYLE, $TREAT_DIRECTORIES, $RECURSIVE, $NEGATED_MATCH, $MSDOS_SHORT_NAMES ) = @$parameters_ref;
+
+    if ($LS_STYLE) {
+
+        my $ls_recursive = 0;
+        my $path = '';
+        my $previous_line = '';
+        my @ls_file_list;
+
+        if ( $pattern =~ m#^(\-[^ ]+)(?: +(.+))?$# ) {
+            @ls_file_list=`ls -1a -p $1 ${path_parameter}/$2`;
+        } else {
+            @ls_file_list=`ls -1a -p ${path_parameter}/$pattern`;
+        }
+
+        if ( $pattern =~ /\-[^ ]*R/ ) {
+            # with `ls -R`, `ls` prepends the path to directories
+            $ls_recursive = 1;
+        }
+        if ( $pattern =~ /\*/ ) {
+            # with `ls *`, `ls` does not prepend the path to directories
+            $ls_recursive = 2;
+            $path = $path_parameter;
+        }
+
+        # @ls_file_list may list a directory,
+        # but it is not indicated in the list,
+        # so let's guess it:
+        # (only $ls_recursive==2 affected (using *), because with -R
+        # only the case where an empty dir is listed is not treated here...
+        # but that can be left aside as a pathological case)
+        if ( $#ls_file_list > -1 &&
+             $ls_recursive == 2 ) {
+            $pattern =~ m#^(\-[^ ]+)(?: +(.+))?$#;
+            my @ls_file_list_d = `ls -1a -p -d ${path_parameter}/$2`;
+            if ( $#ls_file_list_d == 0 &&
+                 -d $ls_file_list_d[0] ) {
+                # There's a directory with elements inside it
+                chomp $ls_file_list_d[0];
+                $path = substr( $ls_file_list_d[0],0,-1 ); # remove trailing '/'
+                # but.... wait! this directory must be affected by the regex also!
+                # and the easiest way is by simulating a ls output:
+                unshift @ls_file_list, $path . ':';
+            }
+        }
+
+        # filter empty lines and parse files to *_LIST , and directories to *_LIST_2
+        foreach my $line (@ls_file_list) {
+            chomp $line;
+            my $file = $line;
+            my $treat_dir = 0;
+
+            if ( $line !~ /^ ?$/ ) {
+
+                if ( $ls_recursive == 1 &&  # `ls -R` style
+                     $line =~ m#^(?:\./)?(.*):$# && $previous_line eq '' ) {
+                    # this is a directory collection, so retain
+                    # and properly store it with consecutive files
+                    $path = $1;
+                    $path = $path_parameter if $path eq '';
+                    $treat_dir = 1;
+                } elsif ( $ls_recursive == 2 ) { # `ls *` style
+                    if ( $line =~ m#^(.+):$# && $previous_line eq '' ) {
+                        # this is a directory collection, so retain
+                        # and properly store it with consecutive files
+                        $path = $1;
+                        $treat_dir = 1;
+                    } else {
+                        # with `ls *` path is prepended, so it must be removed
+                        # to obtain path + filename
+                        if ( $line =~ m#^\Q$path_parameter\E/(.+)$# ) {
+                            $file = $1;
+                            $path = $path_parameter;
+                        } else {
+                            ; # ???
+                        }
+                    }
+                } else {
+                    $path = $path_parameter if $path eq '';
+                }
+
+                if ( $treat_dir ) {
+                    if ( $path ne '.' ) {
+                        # put directories at the end
+                        my ($path2, $file2) = ($path =~ m#^(.+?)(?:/([^/]+))?$#);
+                        ($path2, $file2) = ('.', $path2) if $file2 eq '';
+                        if ( $OS_WINDOWS ) {
+                            # mark Windows folders (for later processing)
+                            $file2 .= $PATH_SEPARATOR;
+                        }
+                        push @FILE_LIST_2, $file2;
+                        push @PATH_LIST_2, $path2;
+                    }
+                    next;
+                }
+
+                if ( $line !~ m#^\.{1,2}/?$# && # escape implied directories . and ..
+                     $line !~ /^\.:$/ ) { # escape implied directory with -R '.:'
+
+                    if ( $line =~ m#^(.+)[/]$# ) {
+                        # remove directory (`ls -p`) identifiers from filename
+                        $file = $1;
+                    } elsif ( $file =~ m#^./(.+)$# ) {
+                        $file = $1;
+                    }
+
+                    if ( $line =~ m#^(.+)/$# ) {
+                        # this is a subdirectory, not a file
+                        if ( $OS_WINDOWS ) {
+                            # mark Windows folders (for later processing)
+                            $file .= $PATH_SEPARATOR;
+                        }
+                        # put directories at the end
+                        push @FILE_LIST_2, $file;
+                        push (@PATH_LIST_2, $path) if $ls_recursive;
+                    } else {
+                        push @FILE_LIST, $file;
+                        push (@PATH_LIST, $path) if $ls_recursive;
+                    }
+                }
+
+            } else {
+                # end of a collection of files under a directory
+                $path = '';
+            }
+
+            $previous_line = $line;
+        }
+
+    } else {
+
+        if ( $^O =~ /^mswin/i ) {
+
+            # https://stackoverflow.com/questions/4048248/variable-foo-will-not-stay-shared-warning-error-in-perl-while-calling-subrout
+            my ( $visit, $scan_directory );
+
+            $visit = sub {
+                my $filename = shift;
+                my $path = shift;
+                # remove last (compulsory) slash of the disk unit alone, for pretty printing:
+                $path = $1 if $path =~ /^([a-z]:)\\$/i;
+                my $is_folder = shift;
+                my $match_prefix = '$filename=~';
+                $match_prefix='$filename!~' if $NEGATED_MATCH;
+                if ( eval( $match_prefix . $pattern ) ) {
+
+                    if ( $is_folder == 1 ) {
+                        # mark Windows folders (for later processing)
+                        $filename .= $PATH_SEPARATOR;
+                        # put directories at the end
+                        push @FILE_LIST_2, $filename;
+                        push @PATH_LIST_2, $path;
+                    } else {
+                        push @FILE_LIST, $filename;
+                        push @PATH_LIST, $path;
+                    }
+                }
+            };
+
+            $scan_directory = sub {
+                my $path = shift;
+                my $folder = $fso->GetFolder( $path );
+                foreach my $subdir ( in $folder->SubFolders ) {
+                    # treat also directories as files for pattern substitution
+                    &$visit( $subdir->Name, $path, 1 ) if $TREAT_DIRECTORIES;
+                    &$scan_directory( $path . $PATH_SEPARATOR . $subdir->Name ) if $RECURSIVE;
+                }
+                foreach my $file ( in $folder->Files ) { &$visit( $file->Name, $path, 0 ) }
+            };
+
+            &$scan_directory( ($path_parameter ne '')? $path_parameter : '.' );
+
+        } else {
+
+            # wanted function for File::Find::find()
+            # ( https://www.perlmonks.org/?replies=1;node_id=395928 )
+            my $wanted = sub {
+                # find()+filter_list() is used only on linux, because unfortunately
+                # File:Find:name uses short MSDOS names in Windows :_(
+
+                my $fpath=$File::Find::dir;
+                # File::Find::name is the complete file path = { path + filename }
+                my ($fname) = ($File::Find::name =~ m#^\Q${File::Find::dir}\E/(.+)$#);
+                if ( -d $File::Find::name && !$RECURSIVE && $fname ne '' && $fname ne '.' && $fname ne '..') {
+                    $File::Find::prune = 1; # do not recurse
+                }
+
+                my $match_prefix = '$fname=~';
+                $match_prefix='$fname!~' if $NEGATED_MATCH;
+                if (eval( $match_prefix . $pattern ) && $fname ne '' && $fname ne '.' && $fname ne '..') {
+
+                    if ( $TREAT_DIRECTORIES && -d $File::Find::name ) {
+                        # put directories at the end
+                        push @FILE_LIST_2, $fname;
+                        push @PATH_LIST_2, $fpath;
+                    } else {
+                        push @FILE_LIST, $fname;
+                        push @PATH_LIST, $fpath;
+                    }
+
+                }
+
+            };
+
+            find( { wanted => $wanted,
+                    no_chdir => 1,  # do not descend to dirs, but use complete path
+                    preprocess => sub { sort { $a cmp $b } @_ }, # order files
+                    },
+                ($path_parameter ne '')? $path_parameter : './' );
+
+        }
+    }
+
+
+    #print join("\n", @FILE_LIST_2);
+    if ($TREAT_DIRECTORIES) {
+        # remove possible duplicates by converting to a hash of hashes
+        my %LIST;
+        my $i=0;
+        foreach my $path (@PATH_LIST_2) {
+            ${$LIST{$path}}{$FILE_LIST_2[$i]} = 1;
+            $i++;
+        }
+        # and travel the hash to separate arrays again
+        @FILE_LIST_2 = ();
+        @PATH_LIST_2 = ();
+        foreach my $path (keys %LIST) {
+            foreach my $file (keys %{$LIST{$path}}) {
+                push @FILE_LIST_2, $file;
+                push @PATH_LIST_2, $path;
+            }
+        }
+
+        # reorder directories, so that the renaming progresses from
+        # deeper subdirectories to upper ones; or equivalently
+        # from longer strings, to shorter ones.
+        # So let's inversely reorder the index based on path lengths (|| filename-alphabetically if equal lengths):
+        # (https://www.perlmonks.org/?node_id=878679)
+        my @index = 0..$#PATH_LIST_2;
+        @index = sort { length($PATH_LIST_2[$b]) <=> length($PATH_LIST_2[$a]) || ($FILE_LIST_2[$a] cmp $FILE_LIST_2[$b]) } @index;
+        @FILE_LIST_2 = @FILE_LIST_2[@index];
+        @PATH_LIST_2 = @PATH_LIST_2[@index];
+
+        # put directories at the end,
+        # so the recursive renaming of files inside them isn't affected
+        # by the (possible) renaming of the directories themselves.
+        push (@FILE_LIST, @FILE_LIST_2);
+        push (@PATH_LIST, @PATH_LIST_2);
+    }
+
+    # if $MSDOS_SHORT_NAMES && $OS_WINDOWS
+    # obtain the short MSDOS name for every pair $PATH_LIST + $FILE_LIST
+    if ( $OS_WINDOWS
+         && $MSDOS_SHORT_NAMES == 1 ) {
+        #my $objElement;
+        my $element_with_path;
+        foreach my $i ( 0 .. $#FILE_LIST ) {
+
+            $element_with_path = $PATH_LIST[ $i ] . $PATH_SEPARATOR . $FILE_LIST[ $i ];
+
+            push @SHORT_FILENAME, $fso->GetFile( $element_with_path )->ShortPath;
+
+        }
+    }
+
+    return (
+        \@FILE_LIST,
+        \@PATH_LIST,
+        # number of directories returned (only to inform the number)
+        ( $#FILE_LIST_2!=-1 )? ( $#FILE_LIST_2+1 ) :0,
+        # reference to @SHORT_FILENAME if $MSDOS_SHORT_NAMES == 1
+        ($MSDOS_SHORT_NAMES == 1)? \@SHORT_FILENAME: ()
+        );
+
+}
 
 
 sub print_message {
@@ -446,33 +595,6 @@ sub print_message {
     } else {
         print $message;
         print ( {$$fLog} decode('UTF-8', $message) ) if $fLog;
-    }
-
-}
-
-
-sub filter_list {
-    # find()+filter_list() is used only on linux, because unfortunately
-    # File:Find:name uses short MSDOS names in Windows :_(
-
-    my $fpath=$File::Find::dir;
-    # File::Find::name is the complete file path = { path + filename }
-    my ($fname) = ($File::Find::name =~ m#^\Q${File::Find::dir}\E/(.+)$#);
-    if ( -d $File::Find::name && !$RECURSIVE && $fname ne '' && $fname ne '.' && $fname ne '..') {
-        $File::Find::prune = 1; # do not recurse
-    }
-
-    if (eval('$fname=~'.$pattern) && $fname ne '' && $fname ne '.' && $fname ne '..') {
-        if ( -d $File::Find::name ) {
-            # do not treat directories themselves:
-            ;
-        } else {
-            # do not treat files directly under current path, but under subfolders:
-            if ( $fpath !~ /^\.(\Q\$PATH_SEPARATOR\E)?$/ ) {            
-                push @FILE_LIST, $fname;
-                push @PATH_LIST, $fpath;
-            }
-        }
     }
 
 }
@@ -758,7 +880,7 @@ All the copying actions can be exported to a text file.
 
 Use:
 
-  cpr [-#hMnNpryY] [ '/FILTER_REGEX/' [PATH] ]
+  cpr [-#FhMnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 
 where '/FILTER_REGEX/' is a regular expression match pattern.
 If '/FILTER_REGEX' is not indicated, '/./' is used (all files).
@@ -769,6 +891,8 @@ whilst in Windows double quotation marks are needed: ""
 
   -#: a number indicating how many files at most will be copied
       from each subdirectory. For example: `-21`
+
+  -F: negate FILTER, so search files that DO NOT match FILTER.
 
   -h: show full help with examples.
 MAN_PAGE_SHORT1

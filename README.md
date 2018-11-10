@@ -113,12 +113,39 @@ In Windows, to copy all files containing the japanese hiragana UTF-8 "の" char 
 
 	C:\temp> echo  -y  "/の/"  "C:\temp2" |  cpr
 
+
+## ListContent() subroutine
+
+Subroutine *`ListContent()`* can be extracted from code and used indepently in other Windows or linux Perl projects. 
+It just needs some global stuff, commented as "`# (...) ListContent() to run properly`" in the code.
+Input parameters are `ListContent( $parameters_ref, $pattern, $path )` where:
+
+* `$parameters_ref` is a reference to an array of boolean ( 0 | 1 ) numeric values representing, in order, the options:
+`( $LS_STYLE, $TREAT_DIRECTORIES, $RECURSIVE, $NEGATED_MATCH, $MSDOS_SHORT_NAMES )`
+* `$pattern` is a regex filter to apply to file names (or ls style pattern, even prepended with options (and even piped throu another command)). If `$NEGATED_MATCH` is `1`, is the regex filter that filenames do not comply with (`$LS_STYLE` must be zero, or otherwise `$NEGATED_MATCH` will be ignored!).
+* `$path` is the filesystem path to be examinated
+
+Return parameter is a reference to an array containing:
+
+* `\@FILE_LIST`, a reference to an array of filenames (each path is in the same index on `@PATH_LIST` array)
+* `\@PATH_LIST`, a reference to an array of paths corresponding to the filename of the same index on `@FILE_LIST` array
+* number of directories returned, only to inform the number. Has sense only if `$TREAT_DIRECTORIES` call option was `1`
+* `\@SHORT_FILENAME`, a reference to an array of path+filename in Windows' [MSDOS short name format](https://docs.microsoft.com/en-us/windows/desktop/fileio/naming-a-file#short-vs-long-names). Is not () only if OS is Windows and `$MSDOS_SHORT_NAMES` call parameter was `1` (or the number of returned files is `0`)
+
+
+## General notes
+
+* The difference between "files =~ search pattern" and "files to copy" numbers, if such, is due to the fact that files in current
+path (not under any subdirectory) are initially counted, though they're later discarded as there is no sense in copying them to pwd... (they'd be overwritten by themselves). Future versions may stop counting files in current directory.
+
+
 ## author
 Written by [circulosmeos](mailto:loopidle@gmail.com)
 based on [`rnm`](https://github.com/circulosmeos/rnm)
 
+
 ## version
-2018-10.26
+2018-11.04
 
 ## license
 [GPL v3](https://www.gnu.org/licenses/gpl-3.0.en.html)
