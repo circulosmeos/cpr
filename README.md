@@ -5,7 +5,7 @@ expressions (regex) **recursively** under subdirectories,
 in linux and Windows, with UTF-8 support.    
 Copied files retain the directories from which they were copied,
 separated with '**_**' chars.    
-If folder name is too long it is abreviated inserting '**...**' in the
+If folder name is too long it is abbreviated inserting '**...**' in the
 middle and erasing chars to just 17 chars per directory.    
 If a filename already exists in current path when copying, a number
 (starting at 0001) will be appended to the copied filename, and so `cpr`
