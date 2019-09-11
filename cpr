@@ -10,7 +10,7 @@
 # Use:
 # cpr [-#FhMnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 # 
-# by circulosmeos 201809 (based on `rnm` script by circulosmeos)
+# by circulosmeos 201809, 201909 (based on `rnm` script by circulosmeos)
 # released under GPL 3 //www.gnu.org/licenses/gpl-3.0.en.html
 # 
 use strict;
@@ -20,13 +20,14 @@ use File::Find;
 use POSIX qw(strftime);
 use File::stat; # in order to use a regex as: rnm -l '$c=stat($_)->mtime; s/(.+)/$c/' '-rt'
 use Encode;
+use IO::Handle; # compatibility with Perl<5.14
 
 use File::Copy qw(copy move); # default action is COPY, but MOVE (-M) is also possible (see $ACTION_MOVE)
 
 my $CPR_VERSION = '
 Written by circulosmeos (//github.com/circulosmeos)
 GPL v3 (//www.gnu.org/licenses/gpl-3.0.en.html)
-version 2018-11.04
+version 2019-09.11
 
 ';
 
