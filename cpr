@@ -10,7 +10,7 @@
 # Use:
 # cpr [-#FhMnNpryY] [ '/FILTER_REGEX/' [PATH] ]
 # 
-# by circulosmeos 201809, 201909 (based on `rnm` script by circulosmeos)
+# by circulosmeos 201809, 201909, 202012 (based on `rnm` script by circulosmeos)
 # released under GPL 3 //www.gnu.org/licenses/gpl-3.0.en.html
 # 
 use strict;
@@ -27,7 +27,7 @@ use File::Copy qw(copy move); # default action is COPY, but MOVE (-M) is also po
 my $CPR_VERSION = '
 Written by circulosmeos (//github.com/circulosmeos)
 GPL v3 (//www.gnu.org/licenses/gpl-3.0.en.html)
-version 2019-09.11
+version 2020-12.14
 
 ';
 
@@ -80,7 +80,7 @@ my $FULL_HELP = 0;
 my $NUMBER_OF_FILES_TO_BE_COPIED = 0;
 my $REMOVE_PATH_PARAMETER = 0; # removes path passed as parameted from file prefixes
 my $PRESERVE_ORIGINAL_FILENAME = 0; # do not prepend path to files on their name
-my ($parameters, $pattern, $path_parameter) = ('', '', '', '');
+my ($parameters, $parameters_to_log, $pattern, $path_parameter) = ('', '', '', '', '');
 
 if ( $#ARGV <= 0 && -p STDIN ) {
     # Read parameters from STDIN.
@@ -102,6 +102,7 @@ INCORRECT_PARAMETERS
 
     $stdin_parameters = <STDIN>;
     chomp $stdin_parameters;
+    $parameters_to_log = $stdin_parameters;
     $stdin_parameters.='  '; # add final spaces to aid in parsing incomplete parameters
     (($parameters, $pattern, $path_parameter) =
         $stdin_parameters =~
@@ -169,6 +170,8 @@ INCORRECT_PARAMETERS
     }
 
     ($path_parameter = shift @ARGV);
+
+    $parameters_to_log = "$parameters $pattern $path_parameter";
 
 }
 
@@ -671,7 +674,9 @@ sub process_array {
             $ANSWER = 'y';
         } else {
             open $fLog, '>:encoding(UTF-8)', $LOG_FILE or die "\nLog file '$LOG_FILE' could not be created.\n";
-            print $fLog  '' . ( ($ACTION_MOVE==0)?'copying':'moving' ) . " files:\ndate: ".(scalar localtime)."\n\n";
+            print $fLog  'Action: ' . ( ($ACTION_MOVE==0)?'copying':'moving' ) . " files\n";
+            print $fLog  "Cmdline parameters: $parameters_to_log\n";
+            print $fLog  'Date: '.(scalar localtime)."\n\n";
         }
     }
     print "\nACTIONS:\n" if $ANSWER=~/y/i;
